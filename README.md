@@ -21,7 +21,7 @@ A customizable command palette for Neovim, built with [nui.nvim](https://github.
 
 ```lua
 {
-  "yourusername/command-palette.nvim",
+  "hayate212/command-palette.nvim",
   dependencies = {
     "MunifTanjim/nui.nvim"
   },
