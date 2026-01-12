@@ -1,7 +1,25 @@
 -- command-palette.nvim
 -- A customizable command palette for Neovim
 
+---@diagnostic disable: undefined-global
+
 local M = {}
+
+-- 定数定義
+local MESSAGES = {
+  PROMPT = " 🔍 ",
+  NO_MATCHES = " No matches found",
+  NO_DESCRIPTION = "No description",
+  SETUP_ERROR = "command-palette: setup() must be called before open()",
+  NO_COMMANDS_WARN = "command-palette: No commands configured",
+}
+
+local LAYOUT = {
+  INPUT_HEIGHT = 3,
+  DESC_HEIGHT = 3,
+  POPUP_HEIGHT = 1,
+  BORDER_OFFSET = 6,
+}
 
 -- カテゴリ名の最大長を計算
 local function get_max_category_length(commands)
@@ -23,6 +41,15 @@ local function filter_commands(commands, query)
         or (cmd.description and cmd.description:lower():find(q, 1, true))
         or (cmd.category and cmd.category:lower():find(q, 1, true))
   end, commands)
+end
+
+-- 選択インデックスの境界チェック
+local function clamp_selection(state)
+  if #state.filtered == 0 then
+    state.selected_index = 1
+  else
+    state.selected_index = math.max(1, math.min(state.selected_index, #state.filtered))
+  end
 end
 
 -- 表示テキストを構築
@@ -60,133 +87,124 @@ local function execute_command(cmd)
   end
 end
 
--- リストを描画
-local function render_list(popup_win, state, max_category_length, show_icons)
+-- UI を描画
+local function render(popup_win, desc_popup_win, state, max_category_length, show_icons)
   vim.schedule(function()
+    -- リストを描画
     local lines = {}
     for i, cmd in ipairs(state.filtered) do
       table.insert(lines, build_display_text(cmd, i == state.selected_index, max_category_length, show_icons))
     end
 
     if #lines == 0 then
-      lines = { " No matches found" }
+      lines = { MESSAGES.NO_MATCHES }
     end
 
     vim.api.nvim_buf_set_lines(popup_win.bufnr, 0, -1, false, lines)
-  end)
-end
 
--- 説明を描画
-local function render_description(desc_popup_win, state)
-  vim.schedule(function()
+    -- 説明を描画
     local desc = ""
     if #state.filtered > 0 and state.filtered[state.selected_index] then
-      desc = state.filtered[state.selected_index].description or "No description"
+      desc = state.filtered[state.selected_index].description or MESSAGES.NO_DESCRIPTION
     end
     vim.api.nvim_buf_set_lines(desc_popup_win.bufnr, 0, -1, false, { " " .. desc })
   end)
 end
 
+-- nui モジュールの遅延読み込み
+local nui_modules
+local function get_nui()
+  if not nui_modules then
+    nui_modules = {
+      Popup = require("nui.popup"),
+      Input = require("nui.input"),
+      Layout = require("nui.layout"),
+    }
+  end
+  return nui_modules
+end
+
 -- UI コンポーネント作成
-local function create_popup(ui_opts)
-  local Popup = require("nui.popup")
+local function create_base_popup(ui_opts, height, winhighlight)
+  local Popup = get_nui().Popup
   return Popup({
     relative = "editor",
     position = "50%",
     size = {
       width = ui_opts.width,
-      height = ui_opts.max_height,
+      height = height,
     },
     border = {
       style = ui_opts.border,
     },
     win_options = {
-      winhighlight = "Normal:Normal,FloatBorder:FloatBorder",
+      winhighlight = winhighlight,
     },
   })
+end
+
+local function create_popup(ui_opts)
+  return create_base_popup(ui_opts, ui_opts.max_height, "Normal:Normal,FloatBorder:FloatBorder")
 end
 
 local function create_desc_popup(ui_opts)
-  local Popup = require("nui.popup")
-  return Popup({
-    relative = "editor",
-    position = "50%",
-    size = {
-      width = ui_opts.width,
-      height = 1,
-    },
-    border = {
-      style = ui_opts.border,
-    },
-    win_options = {
-      winhighlight = "Normal:Comment,FloatBorder:FloatBorder",
-    },
-  })
+  return create_base_popup(ui_opts, LAYOUT.POPUP_HEIGHT, "Normal:Comment,FloatBorder:FloatBorder")
 end
 
-local function create_input(ui_opts, state, commands, popup, desc_popup, max_category_length)
-  local Input = require("nui.input")
+local function create_input(ctx)
+  local Input = get_nui().Input
   return Input({
     relative = "editor",
     position = "50%",
     size = {
-      width = ui_opts.width,
-      height = 1,
+      width = ctx.ui_opts.width,
+      height = LAYOUT.POPUP_HEIGHT,
     },
     border = {
-      style = ui_opts.border,
+      style = ctx.ui_opts.border,
       text = {
-        top = ui_opts.title,
+        top = ctx.ui_opts.title,
         top_align = "center",
       },
     },
   }, {
-    prompt = " 🔍 ",
+    prompt = MESSAGES.PROMPT,
     on_change = function(value)
-      state.query = value
-      state.filtered = filter_commands(commands, value)
-      state.selected_index = math.min(state.selected_index, #state.filtered)
-      if state.selected_index < 1 then
-        state.selected_index = 1
-      end
-      render_list(popup, state, max_category_length, ui_opts.show_icons)
-      render_description(desc_popup, state)
+      ctx.state.query = value
+      ctx.state.filtered = filter_commands(ctx.commands, value)
+      clamp_selection(ctx.state)
+      render(ctx.popup, ctx.desc_popup, ctx.state, ctx.max_category_length, ctx.ui_opts.show_icons)
     end,
   })
 end
 
 -- キーマップ設定
-local function setup_keymaps(input, layout, state, popup, desc_popup, max_category_length, show_icons)
+local function setup_keymaps(ctx)
   local function close_palette()
-    layout:unmount()
+    ctx.layout:unmount()
   end
 
   local function move_selection(delta)
-    if #state.filtered == 0 then return end
-    state.selected_index = state.selected_index + delta
-    if state.selected_index < 1 then
-      state.selected_index = #state.filtered
-    elseif state.selected_index > #state.filtered then
-      state.selected_index = 1
-    end
-    render_list(popup, state, max_category_length, show_icons)
-    render_description(desc_popup, state)
+    local count = #ctx.state.filtered
+    if count == 0 then return end
+    ctx.state.selected_index = ((ctx.state.selected_index - 1 + delta) % count) + 1
+    render(ctx.popup, ctx.desc_popup, ctx.state, ctx.max_category_length, ctx.ui_opts.show_icons)
   end
 
   local function execute_selected()
-    if #state.filtered > 0 then
-      local cmd = state.filtered[state.selected_index]
+    if #ctx.state.filtered > 0 then
+      local cmd = ctx.state.filtered[ctx.state.selected_index]
       close_palette()
       execute_command(cmd)
     end
   end
 
-  input:map("i", "<C-n>", function() move_selection(1) end, { noremap = true })
-  input:map("i", "<Down>", function() move_selection(1) end, { noremap = true })
-  input:map("i", "<C-p>", function() move_selection(-1) end, { noremap = true })
-  input:map("i", "<Up>", function() move_selection(-1) end, { noremap = true })
-  input:map("i", "<CR>", function() execute_selected() end, { noremap = true })
-  input:map("i", "<Esc>", close_palette, { noremap = true })
+  ctx.input:map("i", "<C-n>", function() move_selection(1) end, { noremap = true })
+  ctx.input:map("i", "<Down>", function() move_selection(1) end, { noremap = true })
+  ctx.input:map("i", "<C-p>", function() move_selection(-1) end, { noremap = true })
+  ctx.input:map("i", "<Up>", function() move_selection(-1) end, { noremap = true })
+  ctx.input:map("i", "<CR>", function() execute_selected() end, { noremap = true })
+  ctx.input:map("i", "<Esc>", close_palette, { noremap = true })
 end
 
 -- デフォルト設定
@@ -210,56 +228,60 @@ end
 -- パレットを開く
 function M.open()
   if not M.config then
-    vim.notify("command-palette: setup() must be called before open()", vim.log.levels.ERROR)
+    vim.notify(MESSAGES.SETUP_ERROR, vim.log.levels.ERROR)
     return
   end
 
   if not M.config.commands or #M.config.commands == 0 then
-    vim.notify("command-palette: No commands configured", vim.log.levels.WARN)
+    vim.notify(MESSAGES.NO_COMMANDS_WARN, vim.log.levels.WARN)
     return
   end
 
-  local Layout = require("nui.layout")
-  local max_category_length = get_max_category_length(M.config.commands)
+  local Layout = get_nui().Layout
 
-  local state = {
-    query = "",
-    filtered = M.config.commands,
-    selected_index = 1,
+  -- コンテキストオブジェクトを作成
+  local ctx = {
+    ui_opts = M.config.ui,
+    commands = M.config.commands,
+    max_category_length = get_max_category_length(M.config.commands),
+    state = {
+      query = "",
+      filtered = M.config.commands,
+      selected_index = 1,
+    },
+    popup = create_popup(M.config.ui),
+    desc_popup = create_desc_popup(M.config.ui),
   }
 
-  -- UI コンポーネントを作成
-  local popup = create_popup(M.config.ui)
-  local desc_popup = create_desc_popup(M.config.ui)
-  local input = create_input(M.config.ui, state, M.config.commands, popup, desc_popup, max_category_length)
+  -- Input を作成
+  ctx.input = create_input(ctx)
 
   -- Layout で配置（3段構成）
-  local layout = Layout(
+  ctx.layout = Layout(
     {
       relative = "editor",
       position = "50%",
       size = {
-        width = M.config.ui.width,
-        height = M.config.ui.max_height + 6,
+        width = ctx.ui_opts.width,
+        height = ctx.ui_opts.max_height + LAYOUT.BORDER_OFFSET,
       },
     },
     Layout.Box({
-      Layout.Box(input, { size = 3 }),
-      Layout.Box(popup, { size = M.config.ui.max_height }),
-      Layout.Box(desc_popup, { size = 3 }),
+      Layout.Box(ctx.input, { size = LAYOUT.INPUT_HEIGHT }),
+      Layout.Box(ctx.popup, { size = ctx.ui_opts.max_height }),
+      Layout.Box(ctx.desc_popup, { size = LAYOUT.DESC_HEIGHT }),
     }, { dir = "col" })
   )
 
   -- キーマップ設定
-  setup_keymaps(input, layout, state, popup, desc_popup, max_category_length, M.config.ui.show_icons)
+  setup_keymaps(ctx)
 
   -- マウント
-  layout:mount()
-  render_list(popup, state, max_category_length, M.config.ui.show_icons)
-  render_description(desc_popup, state)
+  ctx.layout:mount()
+  render(ctx.popup, ctx.desc_popup, ctx.state, ctx.max_category_length, ctx.ui_opts.show_icons)
 
   -- Input にフォーカス
-  vim.api.nvim_set_current_win(input.winid)
+  vim.api.nvim_set_current_win(ctx.input.winid)
   vim.cmd("startinsert")
 end
 
