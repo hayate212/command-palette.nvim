@@ -25,14 +25,16 @@ A customizable command palette for Neovim, built with [nui.nvim](https://github.
   dependencies = {
     "MunifTanjim/nui.nvim"
   },
+  cmd = { "CommandPalette" },
   keys = {
-    { "<leader>:", function() require("command-palette").open() end, desc = "Command Palette" },
+    { "<leader>:", "<cmd>CommandPalette<cr>", desc = "Command Palette" },
   },
   opts = {
     commands = {
       -- Your custom commands here
     },
   },
+  config = true,
 }
 ```
 
