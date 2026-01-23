@@ -4,6 +4,7 @@
 ---@diagnostic disable: undefined-global
 
 local M = {}
+local state = require("command-palette.state")
 
 -- 定数定義
 local MESSAGES = {
@@ -181,6 +182,7 @@ end
 -- キーマップ設定
 local function setup_keymaps(ctx)
   local function close_palette()
+    state.set_open(false)
     ctx.layout:unmount()
   end
 
@@ -223,6 +225,7 @@ local default_opts = {
 -- 設定を初期化
 function M.setup(opts)
   M.config = vim.tbl_deep_extend("force", default_opts, opts or {})
+  state.set_config(M.config)
 end
 
 -- パレットを開く
@@ -252,6 +255,8 @@ function M.open()
     popup = create_popup(M.config.ui),
     desc_popup = create_desc_popup(M.config.ui),
   }
+
+  state.set_open(true)
 
   -- Input を作成
   ctx.input = create_input(ctx)
