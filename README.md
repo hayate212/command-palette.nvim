@@ -160,6 +160,42 @@ When the palette is open:
 - `<Esc>`: Close the palette
 - Type to filter commands by name, description, or category
 
+## State API
+
+The state module provides programmatic access to the command palette's internal state, enabling dynamic command management and integration with other plugins.
+
+### Available Functions
+
+| Function | Return | Description |
+|----------|--------|-------------|
+| `state.get_commands()` | table[] | Get list of registered commands |
+| `state.is_open()` | boolean | Check if palette UI is open |
+| `state.add_command(cmd)` | void | Dynamically add a command |
+| `state.remove_command(name)` | void | Remove a command by name |
+
+### Basic Usage
+
+```lua
+local state = require("command-palette.state")
+
+-- Get all registered commands
+local commands = state.get_commands()
+
+-- Check if palette is open
+local is_open = state.is_open()
+
+-- Dynamically add a command
+state.add_command({
+  name = "My Command",
+  description = "Description here",
+  command = "echo 'Hello'",
+  category = "Custom",
+})
+
+-- Remove a command by name
+state.remove_command("My Command")
+```
+
 ## UI Customization
 
 ### Border Styles
